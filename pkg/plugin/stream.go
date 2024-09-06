@@ -3,30 +3,35 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
-	"github.com/grafana/mqtt-datasource/pkg/mqtt"
 )
 
 func (ds *MQTTDatasource) RunStream(ctx context.Context, req *backend.RunStreamRequest, sender *backend.StreamSender) error {
-	chunks := strings.Split(req.Path, "/")
-	if len(chunks) < 2 {
-		return fmt.Errorf("invalid path: %s", req.Path)
+	log.DefaultLogger.Debug("RunStream", "path", req.Path)
+	// No more than one stream with the same ID may exist at the same time.
+	topic, ok := ds.Client.GetTopic(req.Path)
+	if !ok {
+		err := fmt.Errorf("topic not found %s", req.Path)
+		log.DefaultLogger.Error(err.Error())
+		return err
 	}
-
-	interval, err := time.ParseDuration(chunks[0])
-	if err != nil {
+	if topic.Active.Load() {
+		err := fmt.Errorf("stream already running %s", req.Path)
+		log.DefaultLogger.Error(err.Error())
 		return err
 	}
 
-	ds.Client.Subscribe(req.Path)
-	defer ds.Client.Unsubscribe(req.Path)
+	err := ds.Client.Subscribe(topic)
+	if err != nil {
+		return err
+	}
+	defer ds.Client.Unsubscribe(topic)
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(topic.Interval)
 
 	for {
 		select {
@@ -35,17 +40,11 @@ func (ds *MQTTDatasource) RunStream(ctx context.Context, req *backend.RunStreamR
 			ticker.Stop()
 			return nil
 		case <-ticker.C:
-			topic, ok := ds.Client.GetTopic(req.Path)
-			if !ok {
-				log.DefaultLogger.Debug("topic not found", "path", req.Path)
-				break
-			}
 			frame, err := topic.ToDataFrame()
 			if err != nil {
 				log.DefaultLogger.Error("failed to convert topic to data frame", "path", req.Path, "error", err)
 				break
 			}
-			topic.Messages = []mqtt.Message{}
 			if err := sender.SendFrame(frame, data.IncludeAll); err != nil {
 				log.DefaultLogger.Error("failed to send data frame", "path", req.Path, "error", err)
 			}
