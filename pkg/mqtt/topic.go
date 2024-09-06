@@ -1,9 +1,11 @@
 package mqtt
 
 import (
+	"crypto/sha1"
+	"encoding/base64"
 	"path"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/data"
@@ -19,14 +21,17 @@ type Topic struct {
 	Path     string `json:"topic"`
 	Interval time.Duration
 	Messages []Message
+	Active   atomic.Bool
 	framer   *framer
+	mu       sync.Mutex
 }
 
 // Key returns the key for the topic.
 // The key is a combination of the interval string and the path.
 // For example, if the path is "my/topic" and the interval is 1s, the key will be "1s/my/topic".
 func (t *Topic) Key() string {
-	return path.Join(t.Interval.String(), t.Path)
+	hash := sha1.Sum([]byte(path.Join(t.Interval.String(), t.Path)))
+	return base64.URLEncoding.EncodeToString(hash[:])
 }
 
 // ToDataFrame converts the topic to a data frame.
@@ -34,7 +39,17 @@ func (t *Topic) ToDataFrame() (*data.Frame, error) {
 	if t.framer == nil {
 		t.framer = newFramer()
 	}
-	return t.framer.toFrame(t.Messages)
+	m := []Message{}
+	t.mu.Lock()
+	t.Messages, m = m, t.Messages
+	t.mu.Unlock()
+	return t.framer.toFrame(m)
+}
+
+func (t *Topic) AddMessage(message Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Messages = append(t.Messages, message)
 }
 
 // TopicMap is a thread-safe map of topics
@@ -61,8 +76,7 @@ func (tm *TopicMap) AddMessage(path string, message Message) {
 			return false
 		}
 		if topic.Path == path {
-			topic.Messages = append(topic.Messages, message)
-			tm.Store(topic)
+			topic.AddMessage(message)
 		}
 		return true
 	})
@@ -78,7 +92,7 @@ func (tm *TopicMap) HasSubscription(path string) bool {
 			return true // this shouldn't happen, but continue iterating
 		}
 
-		if topic.Path == path {
+		if topic.Active.Load() && topic.Path == path {
 			found = true
 			return false // topic found, stop iterating
 		}
@@ -91,17 +105,10 @@ func (tm *TopicMap) HasSubscription(path string) bool {
 
 // Store stores the topic in the map.
 func (tm *TopicMap) Store(t *Topic) {
-	tm.Map.Store(t.Key(), t)
+	tm.Map.LoadOrStore(t.Key(), t)
 }
 
 // Delete deletes the topic for the given key.
 func (tm *TopicMap) Delete(key string) {
 	tm.Map.Delete(key)
-}
-
-// replace all __PLUS__ with + and one __HASH__ with #
-// Question: Why does grafana not allow + and # in query?
-func resolveTopic(topic string) string {
-	resolvedTopic := strings.ReplaceAll(topic, "__PLUS__", "+")
-	return strings.Replace(resolvedTopic, "__HASH__", "#", -1)
 }

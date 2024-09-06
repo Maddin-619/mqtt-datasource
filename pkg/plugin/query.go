@@ -7,6 +7,7 @@ import (
 	"path"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/grafana/mqtt-datasource/pkg/mqtt"
 )
@@ -39,6 +40,10 @@ func (ds *MQTTDatasource) query(query backend.DataQuery) backend.DataResponse {
 	}
 
 	t.Interval = query.Interval
+
+	log.DefaultLogger.Debug("Query", "path", t.Path)
+
+	ds.Client.StoreTopic(&t)
 
 	frame := data.NewFrame("")
 	frame.SetMeta(&data.FrameMeta{

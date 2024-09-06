@@ -9,8 +9,6 @@ export class DataSource extends DataSourceWithBackend<MqttQuery, MqttDataSourceO
 
   applyTemplateVariables(query: MqttQuery, scopedVars: ScopedVars): Record<string, any> {
     let resolvedTopic = getTemplateSrv().replace(query.topic, scopedVars);
-    resolvedTopic = resolvedTopic.replace(/\+/gi, '__PLUS__');
-    resolvedTopic = resolvedTopic.replace(/\#/gi, '__HASH__');
     const resolvedQuery: MqttQuery = {
       ...query,
       topic: resolvedTopic,

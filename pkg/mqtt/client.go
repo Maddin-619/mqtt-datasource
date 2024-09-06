@@ -3,8 +3,7 @@ package mqtt
 import (
 	"fmt"
 	"math/rand"
-	"path"
-	"strings"
+	"sync"
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
@@ -12,10 +11,11 @@ import (
 )
 
 type Client interface {
+	StoreTopic(*Topic)
 	GetTopic(string) (*Topic, bool)
 	IsConnected() bool
-	Subscribe(string) *Topic
-	Unsubscribe(string)
+	Subscribe(*Topic) error
+	Unsubscribe(*Topic)
 	Dispose()
 }
 
@@ -28,6 +28,7 @@ type Options struct {
 type client struct {
 	client paho.Client
 	topics TopicMap
+	mu     sync.Mutex
 }
 
 func NewClient(o Options) (Client, error) {
@@ -84,47 +85,38 @@ func (c *client) GetTopic(reqPath string) (*Topic, bool) {
 	return c.topics.Load(reqPath)
 }
 
-func (c *client) Subscribe(reqPath string) *Topic {
-	chunks := strings.Split(reqPath, "/")
-	if len(chunks) < 2 {
-		log.DefaultLogger.Error("Invalid path", "path", reqPath)
-		return nil
-	}
-	interval, err := time.ParseDuration(chunks[0])
-	if err != nil {
-		log.DefaultLogger.Error("Invalid interval", "path", reqPath, "interval", chunks[0])
-		return nil
-	}
-
-	topicPath := path.Join(chunks[1:]...)
-	t := &Topic{
-		Path:     topicPath,
-		Interval: interval,
-	}
-	if t, ok := c.topics.Load(topicPath); ok {
-		return t
-	}
-
-	log.DefaultLogger.Debug("Subscribing to MQTT topic", "topic", topicPath)
-
-	topic := resolveTopic(t.Path)
-
-	if token := c.client.Subscribe(topic, 0, func(_ paho.Client, m paho.Message) {
-		// by wrapping HandleMessage we can directly get the correct topicPath for the incoming topic
-		// and don't need to regex it against + and #.
-		c.HandleMessage(topicPath, []byte(m.Payload()))
-	}); token.Wait() && token.Error() != nil {
-		log.DefaultLogger.Error("Error subscribing to MQTT topic", "topic", topicPath, "error", token.Error())
-	}
-	c.topics.Store(t)
-	return t
-}
-
-func (c *client) Unsubscribe(reqPath string) {
-	t, ok := c.GetTopic(reqPath)
-	if !ok {
+func (c *client) StoreTopic(t *Topic) {
+	if t == nil {
 		return
 	}
+	c.topics.Store(t)
+}
+
+func (c *client) Subscribe(t *Topic) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if exists := c.topics.HasSubscription(t.Path); exists {
+		// There is already a subscription to this path,
+		// so we shouldn't subscribe again.
+		t.Active.Store(true)
+		return nil
+	}
+	log.DefaultLogger.Debug("Subscribing to MQTT topic", "topic", t.Path)
+	if token := c.client.Subscribe(t.Path, 0, func(_ paho.Client, m paho.Message) {
+		// by wrapping HandleMessage we can directly get the correct topicPath for the incoming topic
+		// and don't need to regex it against + and #.
+		c.HandleMessage(t.Path, []byte(m.Payload()))
+	}); token.Wait() && token.Error() != nil {
+		log.DefaultLogger.Error("Error subscribing to MQTT topic", "topic", t.Path, "error", token.Error())
+		return token.Error()
+	}
+	t.Active.Store(true)
+	return nil
+}
+
+func (c *client) Unsubscribe(t *Topic) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.topics.Delete(t.Key())
 
 	if exists := c.topics.HasSubscription(t.Path); exists {
@@ -135,8 +127,7 @@ func (c *client) Unsubscribe(reqPath string) {
 
 	log.DefaultLogger.Debug("Unsubscribing from MQTT topic", "topic", t.Path)
 
-	topic := resolveTopic(t.Path)
-	if token := c.client.Unsubscribe(topic); token.Wait() && token.Error() != nil {
+	if token := c.client.Unsubscribe(t.Path); token.Wait() && token.Error() != nil {
 		log.DefaultLogger.Error("Error unsubscribing from MQTT topic", "topic", t.Path, "error", token.Error())
 	}
 }
