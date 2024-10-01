@@ -28,6 +28,7 @@ func (ds *MQTTDatasource) query(query backend.DataQuery) backend.DataResponse {
 		t        mqtt.Topic
 		response backend.DataResponse
 	)
+	t.Downsample = true
 
 	if err := json.Unmarshal(query.JSON, &t); err != nil {
 		response.Error = err

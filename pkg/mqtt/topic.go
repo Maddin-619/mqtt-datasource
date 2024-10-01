@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"path"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,19 +19,20 @@ type Message struct {
 
 // Topic represents a MQTT topic.
 type Topic struct {
-	Path     string `json:"topic"`
-	Interval time.Duration
-	Messages []Message
-	Active   atomic.Bool
-	framer   *framer
-	mu       sync.Mutex
+	Path       string `json:"topic"`
+	Downsample bool   `json:"downsample"`
+	Interval   time.Duration
+	Messages   []Message
+	Active     atomic.Bool
+	framer     *framer
+	mu         sync.Mutex
 }
 
 // Key returns the key for the topic.
 // The key is a combination of the interval string and the path.
 // For example, if the path is "my/topic" and the interval is 1s, the key will be "1s/my/topic".
 func (t *Topic) Key() string {
-	hash := sha1.Sum([]byte(path.Join(t.Interval.String(), t.Path)))
+	hash := sha1.Sum([]byte(path.Join(strconv.FormatBool(t.Downsample), t.Interval.String(), t.Path)))
 	return base64.URLEncoding.EncodeToString(hash[:])
 }
 
@@ -43,6 +45,9 @@ func (t *Topic) ToDataFrame() (*data.Frame, error) {
 	t.mu.Lock()
 	t.Messages, m = m, t.Messages
 	t.mu.Unlock()
+	if t.Downsample && len(m) > 0 {
+		return t.framer.toFrame(m[len(m)-1:])
+	}
 	return t.framer.toFrame(m)
 }
 

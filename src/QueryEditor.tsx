@@ -1,5 +1,5 @@
 import React from 'react';
-import { Input, InlineFieldRow, InlineField } from '@grafana/ui';
+import { Input, InlineFieldRow, InlineField, InlineSwitch } from '@grafana/ui';
 import { QueryEditorProps } from '@grafana/data';
 import { DataSource } from './datasource';
 import { MqttDataSourceOptions, MqttQuery } from './types';
@@ -22,6 +22,21 @@ export const QueryEditor = (props: Props) => {
             value={query.topic}
             onBlur={onRunQuery}
             onChange={handleEvent('topic')}
+          />
+        </InlineField>
+      </InlineFieldRow>
+      <InlineFieldRow>
+        <InlineField label="Downsample" labelWidth={11}>
+          <InlineSwitch
+            value={query.downsample !== undefined ? query.downsample : true}
+            onChange={(event) => {
+              const flag = event.currentTarget.checked;
+              onChange({
+                ...query,
+                downsample: flag,
+              });
+              onRunQuery();
+            }}
           />
         </InlineField>
       </InlineFieldRow>

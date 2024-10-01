@@ -3,6 +3,7 @@ import { DataQuery, DataSourceJsonData } from '@grafana/data';
 export interface MqttQuery extends DataQuery {
   topic?: string;
   stream?: boolean;
+  downsample?: boolean;
 }
 
 export interface MqttDataSourceOptions extends DataSourceJsonData {
